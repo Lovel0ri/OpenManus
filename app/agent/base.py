@@ -11,75 +11,104 @@ from app.schema import ROLE_TYPE, AgentState, Memory, Message
 
 
 class BaseAgent(BaseModel, ABC):
-    """Abstract base class for managing agent state and execution.
+    """Agent的抽象基类，用于管理状态和执行流程。
 
-    Provides foundational functionality for state transitions, memory management,
-    and a step-based execution loop. Subclasses must implement the `step` method.
+    提供状态转换、记忆管理、基于步骤的执行循环以及性能调优功能。
+    子类必须实现 `step` 方法。
     """
 
-    # Core attributes
-    name: str = Field(..., description="Unique name of the agent")
-    description: Optional[str] = Field(None, description="Optional agent description")
+    # 核心属性
+    name: str = Field(..., description="Agent的唯一名称")
+    description: Optional[str] = Field(None, description="Agent的可选描述")
 
-    # Prompts
+    # 提示词
     system_prompt: Optional[str] = Field(
-        None, description="System-level instruction prompt"
+        None, description="系统级指令提示词"
     )
     next_step_prompt: Optional[str] = Field(
-        None, description="Prompt for determining next action"
+        None, description="下一步动作提示词"
     )
 
-    # Dependencies
-    llm: LLM = Field(default_factory=LLM, description="Language model instance")
-    memory: Memory = Field(default_factory=Memory, description="Agent's memory store")
+    # 依赖项
+    llm: LLM = Field(default_factory=LLM, description="语言模型实例")
+    memory: Memory = Field(default_factory=Memory, description="Agent的记忆存储")
     state: AgentState = Field(
-        default=AgentState.IDLE, description="Current agent state"
+        default=AgentState.IDLE, description="Agent当前状态"
     )
 
-    # Execution control
-    max_steps: int = Field(default=10, description="Maximum steps before termination")
-    current_step: int = Field(default=0, description="Current step in execution")
+    # 执行控制
+    max_steps: int = Field(default=10, description="最大执行步数")
+    current_step: int = Field(default=0, description="当前执行步数")
 
-    duplicate_threshold: int = 2
+    duplicate_threshold: int = Field(default=2, description="检测卡壳的重复阈值")
+
+    # 性能调优属性
+    enable_result_cache: bool = Field(default=False, description="是否启用结果缓存")
+    cache_ttl: int = Field(default=0, description="缓存有效期（秒）")
+    preload_frequent_tools: bool = Field(default=False, description="是否预热常用工具")
+    batch_size: int = Field(default=1, description="批量处理请求的数量")
+    token_window_size: int = Field(default=2048, description="LLM上下文窗口大小")
+    summarize_threshold: int = Field(default=0, description="历史记录压缩阈值长度")
 
     class Config:
         arbitrary_types_allowed = True
-        extra = "allow"  # Allow extra fields for flexibility in subclasses
+        extra = "allow"  # 允许子类定义额外字段
 
     @model_validator(mode="after")
     def initialize_agent(self) -> "BaseAgent":
-        """Initialize agent with default settings if not provided."""
+        """在初始化后确保LLM和Memory实例，并应用性能调优设置。"""
+        # 确保 llm 和 memory 正确初始化
         if self.llm is None or not isinstance(self.llm, LLM):
             self.llm = LLM(config_name=self.name.lower())
         if not isinstance(self.memory, Memory):
             self.memory = Memory()
+
+        # 应用性能调优默认设置
+        self.optimize_performance()
         return self
+
+    def optimize_performance(self):
+        """性能调优设置方法"""
+        # 1. 缓存机制
+        self.enable_result_cache = True
+        self.cache_ttl = 3600  # 缓存有效期 3600 秒
+
+        # 2. 工具预热
+        self.preload_frequent_tools = True
+
+        # 3. 批量处理请求
+        self.batch_size = 3  # 每批处理3个请求
+
+        # 4. 模型参数优化
+        self.token_window_size = 6000  # 扩展上下文窗口到6000 tokens
+        self.summarize_threshold = 7500  # 超过7500 tokens时压缩历史记录
 
     @asynccontextmanager
     async def state_context(self, new_state: AgentState):
-        """Context manager for safe agent state transitions.
+        """状态上下文管理器，在执行期间临时切换状态。
 
-        Args:
-            new_state: The state to transition to during the context.
+        参数:
+            new_state: 要切换到的新状态
 
-        Yields:
-            None: Allows execution within the new state.
+        用法:
+            async with self.state_context(AgentState.RUNNING):
+                # 在 RUNNING 状态下执行代码
 
-        Raises:
-            ValueError: If the new_state is invalid.
+        异常处理:
+            如果执行中抛出异常，会将状态设置为 ERROR 并重新抛出。
         """
         if not isinstance(new_state, AgentState):
-            raise ValueError(f"Invalid state: {new_state}")
+            raise ValueError(f"无效的状态: {new_state}")
 
         previous_state = self.state
         self.state = new_state
         try:
             yield
         except Exception as e:
-            self.state = AgentState.ERROR  # Transition to ERROR on failure
+            self.state = AgentState.ERROR  # 出错时切换到 ERROR 状态
             raise e
         finally:
-            self.state = previous_state  # Revert to previous state
+            self.state = previous_state  # 恢复到原始状态
 
     def update_memory(
         self,
@@ -88,17 +117,7 @@ class BaseAgent(BaseModel, ABC):
         base64_image: Optional[str] = None,
         **kwargs,
     ) -> None:
-        """Add a message to the agent's memory.
-
-        Args:
-            role: The role of the message sender (user, system, assistant, tool).
-            content: The message content.
-            base64_image: Optional base64 encoded image.
-            **kwargs: Additional arguments (e.g., tool_call_id for tool messages).
-
-        Raises:
-            ValueError: If the role is unsupported.
-        """
+        """将消息添加到 Agent 的记忆中。"""
         message_map = {
             "user": Message.user_message,
             "system": Message.system_message,
@@ -107,68 +126,60 @@ class BaseAgent(BaseModel, ABC):
         }
 
         if role not in message_map:
-            raise ValueError(f"Unsupported message role: {role}")
+            raise ValueError(f"不支持的消息角色: {role}")
 
-        # Create message with appropriate parameters based on role
+        # 如果是工具消息，附带额外参数
         kwargs = {"base64_image": base64_image, **(kwargs if role == "tool" else {})}
         self.memory.add_message(message_map[role](content, **kwargs))
 
     async def run(self, request: Optional[str] = None) -> str:
-        """Execute the agent's main loop asynchronously.
-
-        Args:
-            request: Optional initial user request to process.
-
-        Returns:
-            A string summarizing the execution results.
-
-        Raises:
-            RuntimeError: If the agent is not in IDLE state at start.
-        """
+        """异步执行 Agent 的主循环。"""
         if self.state != AgentState.IDLE:
-            raise RuntimeError(f"Cannot run agent from state: {self.state}")
+            raise RuntimeError(f"无法在 {self.state} 状态下执行 run 方法")
 
+        # 如果有初始用户请求，先记录到记忆
         if request:
             self.update_memory("user", request)
 
         results: List[str] = []
         async with self.state_context(AgentState.RUNNING):
+            # 当未达到最大步数且未完成时，循环调用 step
             while (
                 self.current_step < self.max_steps and self.state != AgentState.FINISHED
             ):
                 self.current_step += 1
-                logger.info(f"Executing step {self.current_step}/{self.max_steps}")
+                logger.info(f"执行步骤 {self.current_step}/{self.max_steps}")
                 step_result = await self.step()
 
-                # Check for stuck state
+                # 检测卡壳并处理
                 if self.is_stuck():
                     self.handle_stuck_state()
 
-                results.append(f"Step {self.current_step}: {step_result}")
+                results.append(f"步骤 {self.current_step}: {step_result}")
 
+            # 超出最大步数则重置状态
             if self.current_step >= self.max_steps:
                 self.current_step = 0
                 self.state = AgentState.IDLE
-                results.append(f"Terminated: Reached max steps ({self.max_steps})")
+                results.append(f"终止: 已达到最大步数 ({self.max_steps})")
         await SANDBOX_CLIENT.cleanup()
-        return "\n".join(results) if results else "No steps executed"
+        return "\n".join(results) if results else "未执行任何步骤"
 
     @abstractmethod
     async def step(self) -> str:
-        """Execute a single step in the agent's workflow.
-
-        Must be implemented by subclasses to define specific behavior.
-        """
+        """执行单个步骤，需要子类实现具体逻辑。"""
 
     def handle_stuck_state(self):
-        """Handle stuck state by adding a prompt to change strategy"""
-        stuck_prompt = "\
-        Observed duplicate responses. Consider new strategies and avoid repeating ineffective paths already attempted."
+        """处理卡壳状态，通过更新提示词改变策略。"""
+        stuck_prompt = (
+            "检测到重复回复。"
+            "请尝试新的策略，避免重复无效路径。"
+        )
         self.next_step_prompt = f"{stuck_prompt}\n{self.next_step_prompt}"
-        logger.warning(f"Agent detected stuck state. Added prompt: {stuck_prompt}")
+        logger.warning(f"Agent检测到卡壳，已添加提示: {stuck_prompt}")
 
     def is_stuck(self) -> bool:
-        """Check if the agent is stuck in a loop by detecting duplicate content"""
+        """判断Agent是否卡壳，通过检测连续重复的助手回复。"""
         if len(self.memory.messages) < 2:
             return False
 
@@ -176,7 +187,6 @@ class BaseAgent(BaseModel, ABC):
         if not last_message.content:
             return False
 
-        # Count identical content occurrences
         duplicate_count = sum(
             1
             for msg in reversed(self.memory.messages[:-1])
@@ -187,10 +197,10 @@ class BaseAgent(BaseModel, ABC):
 
     @property
     def messages(self) -> List[Message]:
-        """Retrieve a list of messages from the agent's memory."""
+        """获取Agent记忆中的所有消息列表。"""
         return self.memory.messages
 
     @messages.setter
     def messages(self, value: List[Message]):
-        """Set the list of messages in the agent's memory."""
+        """设置Agent记忆中的消息列表。"""
         self.memory.messages = value

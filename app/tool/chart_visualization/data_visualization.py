@@ -137,11 +137,11 @@ Outputs:
                         "title": json_info[index]["chartTitle"],
                     }
                 )
-        if len(error_list) > 0:
-            return {
-                "observation": f"# Error chart generated{'\n'.join(error_list)}\n{self.success_output_template(success_list)}",
-                "success": False,
-            }
+        if error_list:
+            joined = "\n".join(error_list)
+            observation = f"# Error chart generated\n{joined}\n{self.success_output_template(success_list)}"
+            return {"observation": observation, "success": False}
+
         else:
             return {"observation": f"{self.success_output_template(success_list)}"}
 
@@ -185,11 +185,11 @@ Outputs:
             if len(success_list) > 0
             else ""
         )
-        if len(error_list) > 0:
-            return {
-                "observation": f"# Error in chart insights:{'\n'.join(error_list)}\n{success_template}",
-                "success": False,
-            }
+        if error_list:
+            joined = "\n".join(error_list)
+            observation = f"# Error chart generated\n{joined}\n{self.success_output_template(success_list)}"
+            return {"observation": observation, "success": False}
+
         else:
             return {"observation": f"{success_template}"}
 

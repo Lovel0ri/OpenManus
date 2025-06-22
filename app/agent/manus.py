@@ -19,13 +19,13 @@ class Manus(ToolCallAgent):
     """A versatile general-purpose agent with support for both local and MCP tools."""
 
     name: str = "Manus"
-    description: str = "A versatile agent that can solve various tasks using multiple tools including MCP-based tools"
-
+    # description: str = "A versatile agent that can solve various tasks using multiple tools including MCP-based tools使用中文作为输出"
+    description:str = "一个多功能智能体，能够使用包括基于MCP的工具在内的多种工具来解决各种任务。"
     system_prompt: str = SYSTEM_PROMPT.format(directory=config.workspace_root)
     next_step_prompt: str = NEXT_STEP_PROMPT
 
     max_observe: int = 10000
-    max_steps: int = 20
+    max_steps: int = 50
 
     # MCP clients for remote tool access
     mcp_clients: MCPClients = Field(default_factory=MCPClients)

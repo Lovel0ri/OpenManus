@@ -8,6 +8,7 @@ from app.config import config
 from app.logger import logger
 
 
+
 class MCPRunner:
     """Runner class for MCP Agent with proper path handling and configuration."""
 
@@ -73,7 +74,7 @@ def parse_args() -> argparse.Namespace:
         "--connection",
         "-c",
         choices=["stdio", "sse"],
-        default="stdio",
+        default="sse",
         help="Connection type: stdio or sse",
     )
     parser.add_argument(
@@ -114,3 +115,4 @@ async def run_mcp() -> None:
 
 if __name__ == "__main__":
     asyncio.run(run_mcp())
+
